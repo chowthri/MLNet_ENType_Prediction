@@ -160,16 +160,19 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
 
             // EnrollmentType
             var etEngine = _ml.Model.CreatePredictionEngine<ETRow, ETScore>(_etModel);
-            var etScore = etEngine.Predict(ft.ToET());
+            var etRow = ft.ToET();
+            var etScore = etEngine.Predict(etRow);
 
             // RequiredParts
             var rpEngine = _ml.Model.CreatePredictionEngine<RPRow, RPScore>(_rpModel);
-            var rpScore = rpEngine.Predict(ft.ToRP());
+            var rpRow = ft.ToRP();
+            var rpScore = rpEngine.Predict(rpRow);
 
             var predictedType = etScore.PredictedEnrollmentType ?? "AEP";
-            var predictedParts = rpScore.PredictedRequiredParts ?? InferRequiredPartsFallback(ft.ProductCode, ft.HasPartA > 0.5f, ft.HasPartB > 0.5f);
+            var predictedParts = rpScore.PredictedRequiredParts ??
+                                 InferRequiredPartsFallback(ft.ProductCode, ft.HasPartA > 0.5f, ft.HasPartB > 0.5f);
 
-            var (recEff, notes) = RecommendEffectiveDate(predictedType, ft.ToParsed());
+            var (recEff, notes) = RecommendEffectiveDate(predictedType, ft._DebugParsed);
 
             return new PredictResult
             {
@@ -218,7 +221,7 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
 
         private (DateTime recommended, string notes) RecommendEffectiveDate(string predictedType, Parsed p)
         {
-            var baseDate = p.EffectiveDate ?? FirstOfNextMonth(DateTime.Today);
+            var baseDate = p?.EffectiveDate ?? FirstOfNextMonth(DateTime.Today);
             string note;
 
             switch ((predictedType ?? "AEP").ToUpperInvariant())
@@ -332,7 +335,6 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
                 ProductCode = (r.ProductCode ?? "").Trim()
             };
 
-            // Features (aligned with prediction path)
             var baseDate = parsed.EffectiveDate ?? DateTime.Today;
 
             float monthsA = parsed.PartA.HasValue ? MonthsBetween(parsed.PartA.Value, baseDate) : 0f;
@@ -355,11 +357,14 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
                 IsPDP = isPDP,
                 SEPReasonCode = parsed.SEPReasonCode,
 
-                // Labels
+                // NEW: include ProductCode so fallback can see it
+                ProductCode = parsed.ProductCode,
+
+                // Labels for training (may be null during prediction path)
                 EnrollmentType = (r.EnrollmentType ?? "").Trim(),
                 RequiredParts = (r.RequiredParts ?? "").Trim(),
 
-                // For recommendation later (not used by trainer)
+                // Keep parsed around for EffectiveDate notes (prediction path)
                 _DebugParsed = parsed
             };
         }
@@ -398,6 +403,7 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
                 IsMA = isMA,
                 IsPDP = isPDP,
                 SEPReasonCode = parsed.SEPReasonCode,
+                ProductCode = parsed.ProductCode,
                 _DebugParsed = parsed
             };
         }
@@ -441,6 +447,9 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
             public float IsPDP { get; set; }
             public string SEPReasonCode { get; set; }
 
+            // Needed for fallback logic
+            public string ProductCode { get; set; }
+
             // Labels (when training)
             public string EnrollmentType { get; set; }
             public string RequiredParts { get; set; }
@@ -462,7 +471,7 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
                 SEPReasonCode = SEPReasonCode,
                 EnrollmentType = EnrollmentType,
                 _Parsed = _DebugParsed,
-                ProductCode = _DebugParsed?.ProductCode ?? ""
+                ProductCode = ProductCode
             };
 
             // Convert to RP schema row
@@ -479,7 +488,7 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
                 SEPReasonCode = SEPReasonCode,
                 RequiredParts = RequiredParts,
                 _Parsed = _DebugParsed,
-                ProductCode = _DebugParsed?.ProductCode ?? ""
+                ProductCode = ProductCode
             };
         }
 
@@ -536,9 +545,5 @@ RequiredParts    MicroAcc={rpMetrics.MicroAccuracy:F4}  MacroAcc={rpMetrics.Macr
             [ColumnName("PredictedRequiredParts")] public string PredictedRequiredParts { get; set; }
             public float[] Score { get; set; }
         }
-
-        // Helpers to carry parsed for recommender
-        private static Parsed ToParsed(this ETRow r) => r._Parsed ?? new Parsed { DOB = DateTime.Today };
-        private static Parsed ToParsed(this RPRow r) => r._Parsed ?? new Parsed { DOB = DateTime.Today };
     }
 }
